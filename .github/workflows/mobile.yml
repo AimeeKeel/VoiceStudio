@@ -169,12 +169,43 @@ jobs:
 
       - name: UI smoke test
         run: |
+          # DEBUG-keyboard-probe: temporary targeted, independent app launches.
+          xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
+            --predicate 'subsystem == "sh.voicestudio.keyboard-diagnostics"' \
+            > "$RUNNER_TEMP/keyboard-probe.log" 2>&1 &
+          keyboard_log_pid=$!
+          xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 \
+            "$RUNNER_TEMP/keyboard-probe.mp4" > "$RUNNER_TEMP/keyboard-video.log" 2>&1 &
+          keyboard_video_pid=$!
+          finish_keyboard_probe() {
+            kill -INT "$keyboard_video_pid" 2>/dev/null || true
+            kill "$keyboard_log_pid" 2>/dev/null || true
+            wait "$keyboard_video_pid" 2>/dev/null || true
+            wait "$keyboard_log_pid" 2>/dev/null || true
+          }
+          trap finish_keyboard_probe EXIT
           xcodebuild -project mobile/ios/VoiceStudio/VoiceStudio.xcodeproj \
             -scheme VoiceStudio -destination "id=$SIM_UDID" \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
+            -only-testing:VoiceStudioUITests/SmokeTests/testKeyboardDismissalAcrossFormsAndSearch \
+            -only-testing:VoiceStudioUITests/SmokeTests/testKeyboardDismissalUsingWindowEndEditing \
+            -parallel-testing-enabled NO -test-iterations 3 -test-repetition-relaunch-enabled YES \
             CODE_SIGNING_ALLOWED=NO test-without-building
 
+      - name: Preserve keyboard diagnostic traces and recordings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: keyboard-probe
+          path: |
+            ${{ runner.temp }}/keyboard-probe.log
+            ${{ runner.temp }}/keyboard-probe.mp4
+            ${{ runner.temp }}/keyboard-video.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Native video export and playback regressions
+        if: false # DEBUG-keyboard-probe: final branch restores the full matrix.
         run: |
           xcodebuild -project mobile/ios/VoiceStudio/VoiceStudio.xcodeproj \
             -scheme VoiceStudioNative -destination "id=$SIM_UDID" \
@@ -202,6 +233,7 @@ jobs:
       # (it is signed on install with their Apple ID; see docs/mobile.md). Not a
       # release artifact.
       - name: Unsigned iPhone build
+        if: false # DEBUG-keyboard-probe: final branch restores the device build.
         run: |
           xcodebuild -project mobile/ios/VoiceStudio/VoiceStudio.xcodeproj \
             -scheme VoiceStudio -configuration Release -sdk iphoneos \
@@ -212,6 +244,7 @@ jobs:
           (cd "$RUNNER_TEMP/ipa" && zip -qry "$RUNNER_TEMP/VoiceStudio-unsigned.ipa" Payload)
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: false # DEBUG-keyboard-probe: no device artifact in the temporary probe.
         with:
           name: VoiceStudio-ios-unsigned
           path: ${{ runner.temp }}/VoiceStudio-unsigned.ipa
